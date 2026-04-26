@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grove Planner & Alarms 🌿</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-image: url('1000035213.jpg');
+  --highlight: #9dcf7c;
+  --glow:      #c8e8a0;
+  --panel:     rgba(15, 30, 15, 0.9);
+  --border:    #5a8a50;
+  --text:      #d8f0c0;
+  --gold:      #e8d070;
+  --firefly:   #e8f870;
+}
+
+body {
+  background-image: var(--bg-image);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: 'VT323', monospace;
+  margin: 0;
+  min-height: 100vh;
+  font-size: 18px;
+}
+
+.app { max-width: 660px; margin: 0 auto; padding: 20px 14px 80px; }
+
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--border);
+  backdrop-filter: blur(8px);
+  padding: 15px;
+  margin-bottom: 20px;
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+}
+
+/* Clock & Header */
+.date-line { font-family: 'Press Start 2P'; font-size: 7px; color: var(--highlight); text-align: center; margin-bottom: 5px; }
+.clock-digits { font-family: 'Press Start 2P'; font-size: 26px; color: var(--gold); text-align: center; text-shadow: 2px 2px 0 #000; }
+.notif-status { font-size: 12px; text-align: center; color: var(--firefly); margin-top: 5px; cursor: pointer; }
+
+/* Activity List */
+.act-row { display: flex; margin-bottom: 6px; align-items: center; }
+.act-time { width: 70px; background: #000; border: 1px solid var(--border); padding: 4px; text-align: center; color: var(--firefly); font-size: 16px; }
+.act-body { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-left: none; padding: 6px 12px; cursor: pointer; }
+.act-row.done { opacity: 0.4; }
+
+/* Grid Styling */
+.sec-title { font-family: 'Press Start 2P'; font-size: 8px; color: var(--highlight); margin: 25px 0 10px; display: flex; align-items: center; gap: 10px; }
+.sec-title::after { content:''; flex:1; height:1px; background: var(--border); }
+.grid-7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+
+.mcell, .wday { 
+    background: rgba(0,0,0,0.4); 
+    border: 1px solid var(--border); 
+    padding: 5px; 
+    min-height: 50px; 
+    cursor: pointer; 
+    position: relative;
+}
+.today { border-color: var(--firefly) !important; background: rgba(232, 248, 112, 0.1); }
+.has-event::after {
+    content: ''; position: absolute; bottom: 4px; right: 4px;
+    width: 5px; height: 5px; background: var(--firefly); border-radius: 50%;
+}
+
+/* Modals */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 100; }
+.overlay.open { display: flex; }
+.modal { background: #1a2a1a; border: 2px solid var(--highlight); padding: 20px; width: 85%; max-width: 350px; }
+.pinput { width: 100%; padding: 12px; margin: 10px 0; background: #000; border: 1px solid var(--border); color: #fff; font-family: 'VT323'; font-size: 20px; box-sizing: border-box; }
+.pbtn { width: 100%; padding: 10px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; font-family: 'VT323'; font-size: 18px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="panel">
+    <div class="date-line" id="dateLine">-- -- ----</div>
+    <div class="clock-digits" id="clock">00:00:00</div>
+    <div class="notif-status" id="notifBtn" onclick="requestNotifs()">🔔 Enable Notifications</div>
+  </div>
+
+  <div class="sec-title">🌿 DAILY TASKS</div>
+  <div class="panel">
+    <div id="actList"></div>
+    <button class="pbtn" onclick="openTaskModal()">+ ADD NEW TASK</button>
+  </div>
+
+  <div class="sec-title">🍂 WEEKLY PLAN</div>
+  <div class="panel"><div class="grid-7" id="weekGrid"></div></div>
+
+  <div class="sec-title">🌸 MONTHLY VIEW</div>
+  <div class="panel"><div class="grid-7" id="monthGrid"></div></div>
+</div>
+
+<div class="overlay" id="editorModal">
+  <div class="modal">
+    <h3 id="modalTitle" style="font-family:'Press Start 2P'; font-size:9px; color:var(--highlight);">EDIT ITEM</h3>
+    <input type="text" id="itemName" class="pinput" placeholder="Title...">
+    <input type="time" id="itemTime" class="pinput">
+    <button class="pbtn" style="background:var(--highlight); color:#000;" onclick="saveData()">SAVE</button>
+    <button class="pbtn" style="color:#ff6666; border-color:#ff6666;" id="deleteBtn">DELETE</button>
+    <button class="pbtn" onclick="closeModal()">CANCEL</button>
+  </div>
+</div>
+
+<script>
+// Data Management
+let tasks = JSON.parse(localStorage.getItem('grove_tasks')) || [];
+let calendarEvents = JSON.parse(localStorage.getItem('grove_calendar')) || {};
+let currentMode = ''; // 'task' or 'calendar'
+let currentKey = null;
+let notifiedItems = new Set(); // Prevents repeat notifications in the same minute
+
+function requestNotifs() {
+    Notification.requestPermission().then(permission => {
+        if (permission === "granted") {
+            document.getElementById('notifBtn').innerText = "✅ Notifications Active";
+        }
+    });
+}
+
+function updateClock() {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const shortTime = timeStr.substring(0, 5); // HH:MM
+
+    document.getElementById('clock').innerText = timeStr;
+    document.getElementById('dateLine').innerText = now.toDateString().toUpperCase();
+
+    checkNotifications(shortTime, now);
+}
+
+function checkNotifications(currentTime, now) {
+    // Check Tasks
+    tasks.forEach(task => {
+        if (task.time === currentTime && !notifiedItems.has(task.name + currentTime)) {
+            sendNotification("Task Reminder", task.name);
+            notifiedItems.add(task.name + currentTime);
+        }
+    });
+
+    // Check Calendar Events (Current Day)
+    const weekKey = `w-${now.getDay()}`;
+    const monthKey = `m-${now.getDate()}`;
+    
+    [weekKey, monthKey].forEach(key => {
+        const ev = calendarEvents[key];
+        if (ev && ev.time === currentTime && !notifiedItems.has(key + currentTime)) {
+            sendNotification("Event Alert", ev.title);
+            notifiedItems.add(key + currentTime);
+        }
+    });
+
+    // Clear set every new minute to stay fresh
+    if (now.getSeconds() === 0) notifiedItems.clear();
+}
+
+function sendNotification(title, body) {
+    if (Notification.permission === "granted") {
+        new Notification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/891/891399.png' });
+    }
+}
+
+// Rendering UI
+function renderAll() {
+    // Render Tasks
+    const list = document.getElementById('actList');
+    list.innerHTML = tasks.sort((a,b) => a.time.localeCompare(b.time)).map((t, i) => `
+        <div class="act-row ${t.done ? 'done' : ''}">
+            <div class="act-time">${t.time}</div>
+            <div class="act-body" onclick="toggleTask(${i})">${t.name}</div>
+        </div>
+    `).join('');
+
+    // Render Week
+    const days = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+    document.getElementById('weekGrid').innerHTML = days.map((d, i) => {
+        const key = `w-${i}`;
+        const isToday = new Date().getDay() === i;
+        return `<div class="wday ${isToday ? 'today' : ''} ${calendarEvents[key] ? 'has-event' : ''}" onclick="openCalendarModal('${key}')">
+            <div style="font-size:5px; font-family:'Press Start 2P'; color:#7a9a6a;">${d}</div>
+        </div>`;
+    }).join('');
+
+    // Render Month
+    let mHtml = '';
+    for(let i=1; i<=31; i++) {
+        const key = `m-${i}`;
+        const isToday = new Date().getDate() === i;
+        mHtml += `<div class="mcell ${isToday ? 'today' : ''} ${calendarEvents[key] ? 'has-event' : ''}" onclick="openCalendarModal('${key}')">${i}</div>`;
+    }
+    document.getElementById('monthGrid').innerHTML = mHtml;
+}
+
+// Logic Functions
+function openTaskModal() {
+    currentMode = 'task';
+    currentKey = null;
+    document.getElementById('modalTitle').innerText = "NEW TASK";
+    document.getElementById('itemName').value = '';
+    document.getElementById('itemTime').value = '';
+    document.getElementById('deleteBtn').style.display = 'none';
+    document.getElementById('editorModal').classList.add('open');
+}
+
+function openCalendarModal(key) {
+    currentMode = 'calendar';
+    currentKey = key;
+    const existing = calendarEvents[key];
+    document.getElementById('modalTitle').innerText = "EVENT FOR " + key.toUpperCase();
+    document.getElementById('itemName').value = existing ? existing.title : '';
+    document.getElementById('itemTime').value = existing ? existing.time : '';
+    document.getElementById('deleteBtn').style.display = existing ? 'block' : 'none';
+    document.getElementById('editorModal').classList.add('open');
+}
+
+function closeModal() { document.getElementById('editorModal').classList.remove('open'); }
+
+function saveData() {
+    const name = document.getElementById('itemName').value;
+    const time = document.getElementById('itemTime').value;
+    if(!name || !time) return;
+
+    if(currentMode === 'task') {
+        tasks.push({name, time, done: false});
+        localStorage.setItem('grove_tasks', JSON.stringify(tasks));
+    } else {
+        calendarEvents[currentKey] = { title: name, time: time };
+        localStorage.setItem('grove_calendar', JSON.stringify(calendarEvents));
+    }
+    renderAll();
+    closeModal();
+}
+
+document.getElementById('deleteBtn').onclick = () => {
+    if(currentMode === 'calendar') delete calendarEvents[currentKey];
+    localStorage.setItem('grove_calendar', JSON.stringify(calendarEvents));
+    renderAll();
+    closeModal();
+};
+
+function toggleTask(i) {
+    tasks[i].done = !tasks[i].done;
+    localStorage.setItem('grove_tasks', JSON.stringify(tasks));
+    renderAll();
+}
+
+// Init
+setInterval(updateClock, 1000);
+if (Notification.permission === "granted") document.getElementById('notifBtn').innerText = "✅ Notifications Active";
+renderAll();
+updateClock();
+</script>
+
+</body>
+</html>
